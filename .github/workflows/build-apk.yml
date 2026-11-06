@@ -1,0 +1,63 @@
+name: Build INDword APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate project
+        run: |
+          if [ -f package.json ]; then
+            echo "APP_DIR=." >> $GITHUB_ENV
+          else
+            ZIP=$(ls -t *.zip 2>/dev/null | head -n1)
+            [ -z "$ZIP" ] && { echo "No zip found in repo root"; exit 1; }
+            mkdir -p _src && unzip -q -o "$ZIP" -d _src
+            PJ=$(find _src -name package.json -not -path "*/node_modules/*" | head -n1)
+            [ -z "$PJ" ] && { echo "No package.json inside zip"; exit 1; }
+            echo "APP_DIR=$(dirname "$PJ")" >> $GITHUB_ENV
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Accept Android licences
+        run: |
+          SDKM=$(command -v sdkmanager || find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" -name sdkmanager -type f | head -n1)
+          yes | "$SDKM" --licenses > /dev/null || true
+      - name: Install
+        working-directory: ${{ env.APP_DIR }}
+        run: npm install --no-audit --no-fund
+      - name: Build web
+        working-directory: ${{ env.APP_DIR }}
+        run: npm run build
+      - name: Add Android
+        working-directory: ${{ env.APP_DIR }}
+        run: npx cap add android
+      - name: Copy icons and splash
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          if [ -d resources/res ]; then cp -r resources/res/. android/app/src/main/res/; fi
+      - name: Sync
+        working-directory: ${{ env.APP_DIR }}
+        run: npx cap sync android
+      - name: Gradle build
+        working-directory: ${{ env.APP_DIR }}/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../INDword.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: INDword-apk
+          path: ${{ env.APP_DIR }}/INDword.apk
